@@ -92,7 +92,7 @@ jobs:
           pre=""
           case "$GITHUB_REF_NAME" in *-rc*) pre=--prerelease ;; esac
           {
-            echo "下書きです。公開の前に、機器で導入を確かめてください。"
+            echo "下書きです。公開するまでは機器から取れません（404）。公開すると、下の URL がアドオンリポジトリになります。"
             echo
             echo "| アドオン | 版 | Arch | SHA256 |"
             echo "|---|---|---|---|"
