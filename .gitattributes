@@ -1,0 +1,2 @@
+# 機器の sh は CRLF のスクリプトを読めない。Windows で checkout しても LF のままにする
+* text=auto eol=lf

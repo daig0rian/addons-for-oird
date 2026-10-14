@@ -1,0 +1,115 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# アドオンをビルドし、アドオンリポジトリ（*.ird と索引 Packages）を作る。
+#
+#   main への push・pull request・手動 … ビルドして、成果物（artifact "repo"）に置く
+#   版のタグ（v*）の push              … ビルドして、下書きのリリースに置く
+#
+# 公開はしない。できるのは下書き（draft）までで、公開のボタンは人が押す（OpenIRD と同じ）。
+# 公開したリリースは、そのままアドオンリポジトリになる（機器の addons.conf に書く URL）:
+#   https://github.com/<owner>/<repo>/releases/download/<tag>     その版
+#   https://github.com/<owner>/<repo>/releases/latest/download    最新の正式版（pre-release は除く）
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: build (all add-ons)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Source (this commit, from the public repository)
+        run: |
+          set -eu
+          git init -q "$RUNNER_TEMP/src"
+          cd "$RUNNER_TEMP/src"
+          git fetch -q --depth 1 "https://github.com/${GITHUB_REPOSITORY}.git" "$GITHUB_SHA"
+          git checkout -q --detach FETCH_HEAD
+          git log -1 --format='%H %s'
+
+      - name: Build
+        working-directory: ${{ runner.temp }}/src
+        run: |
+          set -eu
+          # アドオンごとの build.sh。どれも SDK を pin どおりに取り、repo/ に .ird を置いて
+          # 索引を作り直す
+          for b in */build.sh; do
+            echo "::group::$b"
+            bash "$b"
+            echo "::endgroup::"
+          done
+          cd repo
+          ls -l
+          cat Packages
+
+      - name: Upload (add-on repository)
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: repo
+          path: ${{ runner.temp }}/src/repo/
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+
+  release:
+    name: draft release
+    needs: build
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write   # 下書きのリリースを作る
+      actions: read     # build ジョブの成果物を取る
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: The add-on repository from the build job
+        run: |
+          set -eu
+          gh run download "$GITHUB_RUN_ID" -n repo -D "$RUNNER_TEMP/repo"
+          cd "$RUNNER_TEMP/repo"
+          # 索引の SHA256 と中身が合っていること（受け渡しで壊れていない）
+          awk '/^Filename:/ { f = $2 } /^SHA256:/ { print $2 "  " f }' Packages | sha256sum -c -
+
+      - name: Draft release
+        run: |
+          set -eu
+          cd "$RUNNER_TEMP/repo"
+          pre=""
+          case "$GITHUB_REF_NAME" in *-rc*) pre=--prerelease ;; esac
+          {
+            echo "下書きです。公開の前に、機器で導入を確かめてください。"
+            echo
+            echo "| アドオン | 版 | Arch | SHA256 |"
+            echo "|---|---|---|---|"
+            awk -F': ' '
+              function row() { if (p != "") print "| " p " | " v " | " a " | `" s "` |"; p = "" }
+              /^Package:/ { p = $2 } /^Version:/ { v = $2 } /^Arch:/ { a = $2 } /^SHA256:/ { s = $2 }
+              /^$/ { row() } END { row() }' Packages
+            echo
+            echo "機器の \`/etc/openird/addons.conf\` に足す URL（このリリースに固定）:"
+            echo
+            echo '```'
+            echo "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME"
+            echo '```'
+            echo
+            echo "- タグ: \`$GITHUB_REF_NAME\`（\`$GITHUB_SHA\`）"
+            echo "- ビルド: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          } > ../notes.md
+          cat ../notes.md
+          gh release create "$GITHUB_REF_NAME" --draft --verify-tag $pre \
+            --title "addons-for-oird ${GITHUB_REF_NAME#v}" --notes-file ../notes.md -- *

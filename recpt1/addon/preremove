@@ -1,0 +1,5 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
+# Stop the server before its files go.
+[ -z "${IRD_ADDON_ROOT:-}" ] || exit 0
+/etc/init.d/S80recpt1 stop
