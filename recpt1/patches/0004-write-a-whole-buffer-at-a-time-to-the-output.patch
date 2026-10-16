@@ -1,0 +1,32 @@
+Subject: [PATCH] write a whole buffer at a time to the output
+
+The reader thread writes its output (a file, stdout, an http client) in
+pieces of SIZE_CHANK, 1316 bytes: the size of a UDP datagram, which a file
+or a TCP socket does not need.  A 16 KB buffer takes 13 write() calls.  On
+the POE-BR100-YB1 the CPU is shared with taking the TS from the tuner, and
+an http client could not keep up with a terrestrial multiplex (about
+2.06 MB/s): writing 16356 instead of 1316 bytes a time raised what the
+device sends while receiving from 2.38 to 2.89 MB/s.
+
+Write all of a buffer at once.  A partial write is still taken care of by
+the loop.  UDP keeps its datagram size.
+
+---
+diff --git a/recpt1/recpt1.c b/recpt1/recpt1.c
+index e39ab4d..5a43a7a 100644
+--- a/recpt1/recpt1.c
++++ b/recpt1/recpt1.c
+@@ -419,8 +419,12 @@ reader_func(void *p)
+             int size_remain = buf.size;
+             int offset = 0;
+ 
++            /* All of it at once: SIZE_CHANK is the size of a UDP datagram
++             * (below), and a file or a TCP socket takes any size.  On a slow
++             * CPU the many small writes are what keeps an http client from
++             * keeping up with the tuner. */
+             while(size_remain > 0) {
+-                int ws = size_remain < SIZE_CHANK ? size_remain : SIZE_CHANK;
++                int ws = size_remain;
+ 
+                 wc = write(wfd, buf.data + offset, ws);
+                 if(wc < 0) {
