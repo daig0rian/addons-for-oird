@@ -1,0 +1,134 @@
+Subject: [PATCH] http: keep serving after a bad request or a failed accept
+
+In --http mode the server ended on errors that concern one client only:
+
+- accept() failing (a connection reset before it was accepted, EINTR,
+  EMFILE) returned from main().  Go on with the next client, waiting a
+  second when out of descriptors.
+- read_line() called exit() when the read failed (a client that resets
+  before its request line), and wrote past the 256 bytes of its buffer on
+  a long line.  Return an error instead, and take at most what fits.
+- "GET /" (no channel) passed NULL to tune(), which crashed.  Close such a
+  connection; s1 is also set before sscanf(), which may leave it unset.
+- SIGPIPE is taken by the signal thread of each session (sigwait), but
+  before the first session has set that up, writing the response header
+  to a client that has gone killed the server.  Block it from the start.
+- When the tuner cannot start, the connection was closed with the rest of
+  the request still unread, which the kernel turns into a reset: the
+  client got ECONNRESET instead of the response.  Take what was sent
+  before closing.
+
+---
+diff --git a/recpt1/recpt1.c b/recpt1/recpt1.c
+index f1de171..e39ab4d 100644
+--- a/recpt1/recpt1.c
++++ b/recpt1/recpt1.c
+@@ -46,24 +46,36 @@
+ extern boolean f_exit;
+ 
+ 
+-/* read 1st line from socket */
+-void read_line(int socket, char *p){
++/* read one line into p (at most size - 1 bytes of it); -1 if the read fails */
++int read_line(int socket, char *p, int size){
++    int n = 0;
+     while (1){
++        char c;
+         int ret;
+-        ret = read(socket, p, 1);
++        ret = read(socket, &c, 1);
+         if ( ret == -1 ){
+             perror("read");
+-            exit(1);
++            p[n] = '\0';
++            return -1;
+         } else if ( ret == 0 ){
+             break;
+         }
+-        if ( *p == '\n' ){
+-            p++;
++        if ( n < size - 1 )
++            p[n++] = c;
++        if ( c == '\n' )
+             break;
+-        }
+-        p++;
+     }
+-    *p = '\0';
++    p[n] = '\0';
++    return n;
++}
++
++/* close a client's connection with a FIN, not a reset: first take what it
++   has sent and was not read (the rest of the request) */
++void close_client(int socket){
++    char buf[256];
++    while (recv(socket, buf, sizeof(buf), MSG_DONTWAIT) > 0)
++        ;
++    close(socket);
+ }
+ 
+ 
+@@ -771,6 +783,15 @@ main(int argc, char **argv)
+         }
+         fprintf(stderr, "pid = %d\n", getpid());
+ 
++        /* A write to a client that has gone raises SIGPIPE.  Each session's
++         * signal thread takes it (sigwait), but until the first session has
++         * set that up its default action would end the server: keep it
++         * blocked from the start. */
++        sigset_t pipeset;
++        sigemptyset(&pipeset);
++        sigaddset(&pipeset, SIGPIPE);
++        pthread_sigmask(SIG_BLOCK, &pipeset, NULL);
++
+         struct sockaddr_in sin;
+         int ret;
+         int sock_optval = 1;
+@@ -880,8 +901,12 @@ main(int argc, char **argv)
+ 
+             connected_socket = accept(listening_socket, (struct sockaddr *)&peer_sin, &len);
+             if ( connected_socket == -1 ){
++                /* a client that has gone, a signal, no descriptor left:
++                 * none of them is a reason to stop serving */
+                 perror("accept");
+-                return 1;
++                if ( errno == EMFILE || errno == ENFILE )
++                    sleep(1);
++                continue;
+             }
+ 
+             peer_host = gethostbyaddr((char *)&peer_sin.sin_addr.s_addr,
+@@ -895,12 +920,21 @@ main(int argc, char **argv)
+             fprintf(stderr,"connect from: %s [%s] port %d\n", h_name, inet_ntoa(peer_sin.sin_addr), ntohs(peer_sin.sin_port));
+ 
+             char buf[256];
+-            read_line(connected_socket, buf);
++            if ( read_line(connected_socket, buf, sizeof(buf)) < 0 ){
++                close(connected_socket);
++                continue;
++            }
+             fprintf(stderr,"request command is %s\n",buf);
+             char s0[256],s1[256],s2[256];
+-            sscanf(buf,"%s%s%s",s0,s1,s2);
++            s1[0] = '\0';
++            sscanf(buf,"%255s%255s%255s",s0,s1,s2);
+             char delim[] = "/";
+             channel = strtok(s1,delim);
++            if(channel == NULL) {
++                fprintf(stderr, "no channel in the request\n");
++                close_client(connected_socket);
++                continue;
++            }
+             char *sidflg = strtok(NULL,delim);
+             if(sidflg)
+                 sid_list = sidflg;
+@@ -933,7 +967,7 @@ main(int argc, char **argv)
+             //tune
+             if(tune(channel, &tdata, device) != 0){
+                 fprintf(stderr, "Tuner cannot start recording\n");
+-                close(connected_socket);
++                close_client(connected_socket);
+                 continue;
+             }
+         }else{    // -http-server add

@@ -1,0 +1,85 @@
+Subject: [PATCH] keep the memory of a long-running server bounded
+
+The http server runs for days, one session after another, on devices
+with little memory (the POE-BR100-YB1 has about 143 MB for Linux).  It
+ran out of it and was killed:
+
+- MAX_QUEUE is 8192 buffers of 16 KB: the queue alone may grow to 134 MB.
+  Make it 1024 (16 MB, several seconds of a terrestrial TS).
+- destroy_queue() frees the queue but not the buffers still in it.  When a
+  client goes away, the reader stops at once and leaves them: every such
+  session leaked what was queued.  Free them.
+- enqueue() returns without queueing the buffer when the queue stays full
+  and the session ends; nobody freed it.  Free it there.
+- A buffer is queued after one read(), and a tuner may hand over only a
+  few packets at a time, yet the buffer takes its whole 16 KB in the
+  queue.  Read until it is full first.
+
+---
+diff --git a/recpt1/recpt1.c b/recpt1/recpt1.c
+index 99f0903..f1de171 100644
+--- a/recpt1/recpt1.c
++++ b/recpt1/recpt1.c
+@@ -176,6 +176,14 @@ destroy_queue(QUEUE_T *p_queue)
+     if(!p_queue)
+         return;
+ 
++    /* buffers nobody has taken out (the reader stopped: the client went away) */
++    while(p_queue->num_used > 0) {
++        free(p_queue->buffer[p_queue->out]);
++        p_queue->out++;
++        p_queue->out %= p_queue->size;
++        p_queue->num_used--;
++    }
++
+     pthread_mutex_destroy(&p_queue->mutex);
+     pthread_cond_destroy(&p_queue->cond_avail);
+     pthread_cond_destroy(&p_queue->cond_used);
+@@ -208,6 +216,7 @@ enqueue(QUEUE_T *p_queue, BUFSZ *data)
+         }
+         if(f_exit) {
+             pthread_mutex_unlock(&p_queue->mutex);
++            free(data);     /* not queued: nobody else will free it */
+             return;
+         }
+     }
+@@ -1003,16 +1012,25 @@ main(int argc, char **argv)
+             }
+             bufptr->size = read(tdata.tfd, bufptr->buffer, MAX_READ_SIZE);
+             if(bufptr->size <= 0) {
++                free(bufptr);
+                 if((cur_time - tdata.start_time) >= tdata.recsec && !tdata.indefinite) {
+                     f_exit = TRUE;
+                     enqueue(p_queue, NULL);
+                     break;
+                 }
+                 else {
+-                    free(bufptr);
+                     continue;
+                 }
+             }
++            /* A tuner may hand over a few packets at a time.  A queued buffer
++             * takes its whole size whatever it holds: fill it first. */
++            while(bufptr->size < MAX_READ_SIZE && !f_exit) {
++                int n = read(tdata.tfd, bufptr->buffer + bufptr->size,
++                             MAX_READ_SIZE - bufptr->size);
++                if(n <= 0)
++                    break;
++                bufptr->size += n;
++            }
+             enqueue(p_queue, bufptr);
+ 
+             /* stop recording */
+diff --git a/recpt1/recpt1.h b/recpt1/recpt1.h
+index 01e4bcd..054ad54 100644
+--- a/recpt1/recpt1.h
++++ b/recpt1/recpt1.h
+@@ -6,7 +6,7 @@
+ #define NUM_ISDB_T_DEV  128
+ #define CHTYPE_SATELLITE    0        /* satellite digital */
+ #define CHTYPE_GROUND       1        /* terrestrial digital */
+-#define MAX_QUEUE           8192
++#define MAX_QUEUE           1024   /* 1024 * 16356 B = 16 MB: what a small device can hold */
+ #define MAX_READ_SIZE       (188 * 87) /* 188*87=16356 splitterが188アライメントを期待しているのでこの数字とする*/
+ #define WRITE_SIZE          (1024 * 1024 * 2)
+ #define TRUE                1
