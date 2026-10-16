@@ -16,9 +16,9 @@
 #   - x86_64 の Linux/WSL。
 #   - git でネットに出られること（recpt1 を pin した commit で取得する）。
 #
-# recpt1 は上流のソースに手を入れずに使う。libarib25 は使わない（スクランブル解除は
-# 扱わない）＝ config.h で HAVE_LIBARIB25 を未定義にし、b25 を含まない 5 本だけを
-# 静的リンクする（アドオンは自己完結が前提）。
+# recpt1 は上流のソースに patches/ の修正だけを当てて使う（どれも上流の不具合の修正）。
+# libarib25 は使わない（スクランブル解除は扱わない）＝ config.h で HAVE_LIBARIB25 を
+# 未定義にし、b25 を含まない 5 本だけを静的リンクする（アドオンは自己完結が前提）。
 set -eu
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -28,9 +28,9 @@ OUT="${1:-$HERE/../repo}"
 RECPT1_REPO="https://github.com/stz2012/recpt1"
 RECPT1_COMMIT="77c7bce2527e1df45cc8667ede753d09de7b3e6c"   # 2025-07-29
 RECPT1_VERSION="1.2.0"                                      # configure.ac の AC_INIT
-# アドオン側（addon/ の中身やこのスクリプト）だけを変えたときに上げる。版が同じだと、
+# アドオン側（addon/・patches/ の中身やこのスクリプト）だけを変えたときに上げる。版が同じだと、
 # 機器の ird-addon は「導入済み」とみなして入れ替えない。
-ADDON_REV=1
+ADDON_REV=2
 VERSION="$RECPT1_VERSION-${RECPT1_COMMIT:0:7}-$ADDON_REV"
 
 # SDK（CC・CROSS_COMPILE・IRD_ARCH と、PATH の ird-mkaddon）: sdk.env を読んであれば
@@ -53,6 +53,11 @@ git -C "$SRC" fetch -q --depth 1 "$RECPT1_REPO" "$RECPT1_COMMIT" || {
 	echo "✗ pin した commit を取得できない: $RECPT1_COMMIT"; exit 1; }
 git -C "$SRC" checkout -q FETCH_HEAD
 echo "recpt1 @ $(git -C "$SRC" log -1 --format='%h %ci')"
+for p in "$HERE"/patches/*.patch; do
+	[ -e "$p" ] || continue
+	echo "patch: ${p##*/}"
+	git -C "$SRC" apply "$p"
+done
 
 R="$SRC/recpt1"
 # recpt1 の ABI（driver/pt1_ioctl.h）が OpenIRD の chardev（px4_drv 互換・magic 0x8D）と
@@ -63,7 +68,7 @@ grep -E 'SET_CHANNEL|START_REC|STOP_REC|GET_SIGNAL_STRENGTH' "$SRC/driver/pt1_io
 # configure を回さずに済むよう、autoconf が作る 2 つだけ手で用意する
 #   version.h : const char *version（recpt1 --version が出す）
 #   config.h  : HAVE_LIBARIB25 を未定義（b25 を外す）
-echo "const char *version = \"$RECPT1_VERSION (stz2012 ${RECPT1_COMMIT:0:12}, without libarib25)\";" > "$R/version.h"
+echo "const char *version = \"$RECPT1_VERSION (stz2012 ${RECPT1_COMMIT:0:12} + addons-for-oird patches, without libarib25)\";" > "$R/version.h"
 printf '/* cross build without libarib25 */\n#undef HAVE_LIBARIB25\n' > "$R/config.h"
 
 # --- b25 を含まない 5 本を静的リンク（recpt1 の Makefile.in の OBJS と同じ）------

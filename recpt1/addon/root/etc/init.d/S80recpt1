@@ -8,14 +8,21 @@
 # client at a time (one tuner).  recpt1 is built without libarib25: the
 # stream is passed on as it was broadcast.
 #
+# The server ends by itself on some errors (it cannot accept, the tuner does
+# not start recording).  A watchdog - this script, run as "S80recpt1 watch" -
+# starts it, and starts it again a few seconds after it has ended.  stop ends
+# both.
+#
 # Settings go to /etc/default/recpt1.  That file is not part of the add-on,
 # so it stays when the add-on is replaced:
 #     PORT=12345
 #     DEVICE=/dev/irdvideo0
-# What recpt1 says goes to the system log (/var/log/messages, tag "recpt1").
-# Messages are ASCII only.
+# What recpt1 says goes to the system log (/var/log/messages, tag "recpt1"),
+# and so does every restart.  Messages are ASCII only.
 
+SELF=/etc/init.d/S80recpt1
 DAEMON=/usr/bin/recpt1
+PIDFILE=/var/run/recpt1-watchdog.pid
 PORT=12345
 DEVICE=/dev/irdvideo0
 [ -r /etc/default/recpt1 ] && . /etc/default/recpt1
@@ -33,27 +40,17 @@ daemon_pid() {
 	return 1
 }
 
-start() {
-	printf "Starting recpt1 (http, port %s): " "$PORT"
-	daemon_pid >/dev/null && { echo "already running"; return 0; }
-	# Nothing of the caller's stays open in the daemon (an ssh session
-	# would wait for it to be closed).
-	"$DAEMON" --http "$PORT" --device "$DEVICE" 2>&1 </dev/null |
-		logger -t recpt1 >/dev/null 2>&1 &
-	# recpt1 takes the port after it has forked, and leaves if it cannot
-	# have it: a daemon that is still there a moment later is listening.
-	sleep 1
-	daemon_pid >/dev/null || { echo "FAIL"; return 1; }
-	echo "OK"
+watchdog() {
+	start-stop-daemon -q -p "$PIDFILE" -x /bin/sh "$@"
 }
 
-stop() {
+# halt: end the server.  TERM ends the stream that is being sent and gives
+# the tuner back.  The daemon itself can outlive it: once recpt1 has served a
+# client it keeps TERM blocked while it waits for the next one.  So KILL
+# follows.
+halt() {
 	local pid
-	printf "Stopping recpt1: "
-	pid="$(daemon_pid)" || { echo "not running"; return 0; }
-	# TERM ends the stream that is being sent and gives the tuner back.
-	# The daemon itself can outlive it: once recpt1 has served a client it
-	# keeps TERM blocked while it waits for the next one.  So KILL follows.
+	pid="$(daemon_pid)" || return 0
 	kill "$pid" 2>/dev/null
 	sleep 1
 	kill -KILL "$pid" 2>/dev/null
@@ -61,6 +58,51 @@ stop() {
 	while kill -0 "$pid" 2>/dev/null; do
 		sleep 0.1
 	done
+}
+
+watch() {
+	# stop sends TERM: it takes effect once the server has gone (the pipe
+	# below has ended), so no new one is started after that
+	trap 'exit 0' TERM
+	while :; do
+		# The daemon keeps the write end of the pipe, so logger reads
+		# until the server ends.
+		"$DAEMON" --http "$PORT" --device "$DEVICE" 2>&1 </dev/null |
+			logger -t recpt1
+		logger -t recpt1 "the server has ended; starting it again in 5 seconds"
+		sleep 5 &
+		wait $!
+	done
+}
+
+start() {
+	printf "Starting recpt1 (http, port %s): " "$PORT"
+	watchdog -K -t && { echo "already running"; return 0; }
+	# a server left without its watchdog would keep the port
+	halt
+	watchdog -S -b -m -- "$SELF" watch
+	# recpt1 takes the port after it has forked, and leaves if it cannot
+	# have it: a daemon that is still there a moment later is listening.
+	sleep 1
+	daemon_pid >/dev/null || {
+		echo "FAIL (trying again every 5 seconds, see /var/log/messages)"
+		return 1
+	}
+	echo "OK"
+}
+
+stop() {
+	printf "Stopping recpt1: "
+	# the watchdog first, so that it starts no new server
+	watchdog -K
+	halt
+	# A server may have been starting as the watchdog got TERM: end that
+	# one too, until the watchdog is gone.
+	while watchdog -K -t; do
+		halt
+		sleep 0.1
+	done
+	rm -f "$PIDFILE"
 	echo "OK"
 }
 
@@ -68,5 +110,6 @@ case "$1" in
 	start) start ;;
 	stop) stop ;;
 	restart|reload) stop; start ;;
+	watch) watch ;;
 	*) echo "Usage: $0 {start|stop|restart}"; exit 1 ;;
 esac

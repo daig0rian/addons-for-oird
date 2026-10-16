@@ -17,6 +17,7 @@ OpenIRD の像は、チューナを chardev（`/dev/irdvideoN`）として見せ
 fetch-sdk.sh                 OpenIRD の SDK の pin（URL と sha256）。取得して展開する
 <name>/build.sh              ソースを取得してビルドし、.ird と索引を作る
 <name>/addon/                .ird に入れるファイル（起動スクリプト・postinstall・preremove）
+<name>/patches/              上流のソースに当てる修正（あれば）
 .github/workflows/build.yml  GitHub Actions でのビルドと、下書きのリリース
 repo/                        ビルドの出力（*.ird と索引 Packages）。git 管理外
 ```

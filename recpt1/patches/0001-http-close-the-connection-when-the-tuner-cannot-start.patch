@@ -1,0 +1,24 @@
+Subject: [PATCH] http: close the connection when the tuner cannot start
+
+In --http mode, when tune() fails (the channel does not lock, the device
+cannot be opened, the channel is unknown), recpt1 goes back to accept()
+without closing the client's socket.  Each such request leaks one
+descriptor, and the client gets "200 OK" and then nothing.  When the
+descriptors run out, accept() fails with EMFILE and the daemon exits:
+every later client gets "connection refused" until it is started again.
+
+Close the socket before waiting for the next client.
+
+---
+diff --git a/recpt1/recpt1.c b/recpt1/recpt1.c
+index 0cbbf3b..99f0903 100644
+--- a/recpt1/recpt1.c
++++ b/recpt1/recpt1.c
+@@ -924,6 +924,7 @@ main(int argc, char **argv)
+             //tune
+             if(tune(channel, &tdata, device) != 0){
+                 fprintf(stderr, "Tuner cannot start recording\n");
++                close(connected_socket);
+                 continue;
+             }
+         }else{    // -http-server add
