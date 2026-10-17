@@ -1,0 +1,37 @@
+Subject: [PATCH] do not use the freed last buffer when a session ends
+
+reader_func() frees each buffer once it has been written.  When the
+session ends, it then takes that same buffer again (buf = sbuf), splits it
+once more when a SID was asked for, and writes the splitter's whole buffer
+(buffer_size, not what was filled).  With a SID, closing an http client
+made the server read freed memory and end (seen on the SB-TV06-WRIP).
+
+Only a decoder may still hold data at that point: start from an empty
+buffer, and write what the splitter filled.
+
+---
+diff --git a/recpt1/recpt1.c b/recpt1/recpt1.c
+index 426e08f..eca3ab6 100644
+--- a/recpt1/recpt1.c
++++ b/recpt1/recpt1.c
+@@ -462,7 +462,10 @@ reader_func(void *p)
+         /* normal exit */
+         if((f_exit && !p_queue->num_used) || file_err) {
+ 
+-            buf = sbuf; /* default */
++            /* The last buffer was written and freed above (sbuf points into
++             * it): what is left is only what a decoder still holds. */
++            buf.data = NULL;
++            buf.size = 0;
+ 
+             if(use_b25) {
+                 code = b25_finish(dec, &sbuf, &dbuf);
+@@ -485,7 +488,7 @@ reader_func(void *p)
+                 }
+ 
+                 buf.data = splitbuf.buffer;
+-                buf.size = splitbuf.buffer_size;
++                buf.size = splitbuf.buffer_filled;
+             }
+ 
+             if(!fileless && !file_err) {

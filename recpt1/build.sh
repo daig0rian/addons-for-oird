@@ -30,7 +30,7 @@ RECPT1_COMMIT="77c7bce2527e1df45cc8667ede753d09de7b3e6c"   # 2025-07-29
 RECPT1_VERSION="1.2.0"                                      # configure.ac の AC_INIT
 # アドオン側（addon/・patches/ の中身やこのスクリプト）だけを変えたときに上げる。版が同じだと、
 # 機器の ird-addon は「導入済み」とみなして入れ替えない。
-ADDON_REV=3
+ADDON_REV=4
 VERSION="$RECPT1_VERSION-${RECPT1_COMMIT:0:7}-$ADDON_REV"
 
 # SDK（CC・CROSS_COMPILE・IRD_ARCH と、PATH の ird-mkaddon）: sdk.env を読んであれば

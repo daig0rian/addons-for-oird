@@ -1,0 +1,93 @@
+Subject: [PATCH] http: the SID belongs to one request
+
+The request line is read into arrays local to the block that reads it,
+and channel and sid_list point into s1 after that block has ended: they
+are used out of their scope (AddressSanitizer: stack-use-after-scope on
+any request with a SID).
+
+GET /<channel>/<sid> sets sid_list, and a request without a SID left it
+as it was: the SID of an earlier request carried over, pointing into s1,
+which the next request overwrites.  A later request got a SID nobody asked
+for, or an empty one.  When split_startup() could not take such a SID it
+returned NULL, which was used without a check, and the server crashed.
+
+- Keep the request's text where it lives as long as the loop.
+- Take the SID from the request, or --sid when it names none.
+- When split_startup() fails, close that connection and wait for the
+  next one (http); the check also covers its NULL.
+- Free the splitter when the tuner cannot start.
+
+---
+diff --git a/recpt1/recpt1.c b/recpt1/recpt1.c
+index 5a43a7a..426e08f 100644
+--- a/recpt1/recpt1.c
++++ b/recpt1/recpt1.c
+@@ -896,6 +896,12 @@ main(int argc, char **argv)
+         }
+     }
+ 
++    /* The request's text.  The channel and the SID point into s1 and are
++     * used after the block that reads the request: it lives here. */
++    char buf[256], s0[256], s1[256], s2[256];
++    /* --sid: what a request that names no SID gets */
++    char *sid_default = sid_list;
++
+     while(1){    // http-server add-
+         if(use_http){
+             struct hostent *peer_host;
+@@ -923,13 +929,11 @@ main(int argc, char **argv)
+ 
+             fprintf(stderr,"connect from: %s [%s] port %d\n", h_name, inet_ntoa(peer_sin.sin_addr), ntohs(peer_sin.sin_port));
+ 
+-            char buf[256];
+             if ( read_line(connected_socket, buf, sizeof(buf)) < 0 ){
+                 close(connected_socket);
+                 continue;
+             }
+             fprintf(stderr,"request command is %s\n",buf);
+-            char s0[256],s1[256],s2[256];
+             s1[0] = '\0';
+             sscanf(buf,"%255s%255s%255s",s0,s1,s2);
+             char delim[] = "/";
+@@ -940,8 +944,10 @@ main(int argc, char **argv)
+                 continue;
+             }
+             char *sidflg = strtok(NULL,delim);
+-            if(sidflg)
+-                sid_list = sidflg;
++            /* The SID is the request's own: one that an earlier request
++             * named must not carry over (it points into s1, which this
++             * request has overwritten). */
++            sid_list = sidflg ? sidflg : sid_default;
+             fprintf(stderr,"channel is %s\n",channel);
+ 
+             if(sid_list == NULL || !strcmp(sid_list,"all")){
+@@ -955,8 +961,16 @@ main(int argc, char **argv)
+         /* initialize splitter */
+         if(use_splitter) {
+             splitter = split_startup(sid_list);
+-            if(splitter->sid_list == NULL) {
++            /* split_startup() returns NULL for a SID it cannot take */
++            if(splitter == NULL || splitter->sid_list == NULL) {
+                 fprintf(stderr, "Cannot start TS splitter\n");
++                if(use_http) {
++                    split_shutdown(splitter);
++                    splitter = NULL;
++                    use_splitter = FALSE;
++                    close_client(connected_socket);
++                    continue;
++                }
+                 return 1;
+             }
+         }
+@@ -972,6 +986,10 @@ main(int argc, char **argv)
+             if(tune(channel, &tdata, device) != 0){
+                 fprintf(stderr, "Tuner cannot start recording\n");
+                 close_client(connected_socket);
++                if(use_splitter) {
++                    split_shutdown(splitter);
++                    splitter = NULL;
++                }
+                 continue;
+             }
+         }else{    // -http-server add
