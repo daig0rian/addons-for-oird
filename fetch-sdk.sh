@@ -18,8 +18,8 @@
 set -eu
 
 # SDK の pin。上げるときは、リリースの SHA256SUMS の値と一緒に 2 つとも変える。
-SDK_URL="https://github.com/daig0rian/openird/releases/download/v26.10-rc3/openird-sdk-26.10-rc3-emma3sep-mipseb-musl.Linux-x86_64.tar.xz"
-SDK_SHA256="57b9b7774469f8fa17bfadd2960f3f9e382c5da76a878f170e5f4874db1bef6e"
+SDK_URL="https://github.com/daig0rian/openird/releases/download/v26.10-rc9/openird-sdk-26.10-rc9-emma3sep-mipseb-musl.Linux-x86_64.tar.xz"
+SDK_SHA256="615c8a633d0dd167b38c7b86cf21387e59f3fac89ab4df3737fec9dc62a8eefa"
 
 CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/openird-sdk"
 FILE="${SDK_URL##*/}"

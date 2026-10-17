@@ -9,7 +9,7 @@ OpenIRD の像は、チューナを chardev（`/dev/irdvideoN`）として見せ
 
 | アドオン | 中身 |
 |---|---|
-| [recpt1](recpt1/) | recpt1（stz2012 版）を http モードで常駐させ、機器を TS サーバにする |
+| [recpt1](recpt1/) | recpt1（stz2012 版・libarib25 入り）を http モードで常駐させ、機器を TS サーバにする |
 
 ## 構成
 

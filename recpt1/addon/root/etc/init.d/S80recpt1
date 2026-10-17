@@ -5,8 +5,12 @@
 # "recpt1 --http <port>" makes the tuner an HTTP server: a client asks for
 #     GET /<channel>[/<sid>]
 # and gets the TS as it is received, until it closes the connection.  One
-# client at a time (one tuner).  recpt1 is built without libarib25: the
-# stream is passed on as it was broadcast.
+# client at a time (one tuner).
+#
+# recpt1 is built with libarib25.  By default it passes the stream on as it
+# was broadcast; set B25=1 (below) to descramble with a B-CAS card in the
+# reader.  Use that only with your own legitimately issued card, for
+# broadcasts you are licensed to receive.
 #
 # The server ends by itself on some errors (it cannot accept, the tuner does
 # not start recording).  A watchdog - this script, run as "S80recpt1 watch" -
@@ -17,6 +21,7 @@
 # so it stays when the add-on is replaced:
 #     PORT=12345
 #     DEVICE=/dev/irdvideo0
+#     B25=0            # 1 to descramble with a B-CAS card (needs a reader)
 # What recpt1 says goes to the system log (/var/log/messages, tag "recpt1"),
 # and so does every restart.  Messages are ASCII only.
 
@@ -25,16 +30,21 @@ DAEMON=/usr/bin/recpt1
 PIDFILE=/var/run/recpt1-watchdog.pid
 PORT=12345
 DEVICE=/dev/irdvideo0
+B25=0
 [ -r /etc/default/recpt1 ] && . /etc/default/recpt1
 
+# extra daemon arguments from the settings (only --b25 for now)
+B25ARG=
+[ "$B25" = 1 ] && B25ARG=--b25
+
 # recpt1 turns itself into a daemon and writes no pid file: find it by its
-# command line.  A recording started by hand is another recpt1, and none of
-# this script's business.
+# command line.  A recording started by hand is another recpt1 (no --http),
+# and none of this script's business.
 daemon_pid() {
 	local p
 	for p in $(pidof recpt1); do
 		case "$(tr '\0' ' ' < "/proc/$p/cmdline" 2>/dev/null)" in
-			"$DAEMON --http "*) echo "$p"; return 0 ;;
+			"$DAEMON "*"--http "*) echo "$p"; return 0 ;;
 		esac
 	done
 	return 1
@@ -64,10 +74,11 @@ watch() {
 	# stop sends TERM: it takes effect once the server has gone (the pipe
 	# below has ended), so no new one is started after that
 	trap 'exit 0' TERM
+	set -- $B25ARG --http "$PORT" --device "$DEVICE"
 	while :; do
 		# The daemon keeps the write end of the pipe, so logger reads
-		# until the server ends.
-		"$DAEMON" --http "$PORT" --device "$DEVICE" 2>&1 </dev/null |
+		# until the server ends.  "$@" is the daemon's command line.
+		"$DAEMON" "$@" 2>&1 </dev/null |
 			logger -t recpt1
 		logger -t recpt1 "the server has ended; starting it again in 5 seconds"
 		sleep 5 &

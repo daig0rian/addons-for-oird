@@ -8,10 +8,11 @@
 
 | パス | 中身 |
 |---|---|
-| `/usr/bin/recpt1` | 上流のソースに [patches/](patches/) の修正を当てて静的リンクしたもの。libarib25 は入れていない |
+| `/usr/bin/recpt1` | 上流のソースに [patches/](patches/) の修正を当て、[libarib25](https://github.com/stz2012/libarib25) を静的リンクしたもの |
 | `/etc/init.d/S80recpt1` | 起動スクリプト。起動のたびにサーバを立て、サーバが落ちたら立て直す |
 
-導入した時点でサーバが起動し、削除の前に止まる。
+導入した時点でサーバが起動し、削除の前に止まる。既定ではスクランブルを解除しない（素の TS を
+出す）。B-CAS で解除するには下の「B-CAS」を見る。
 
 ## 使う
 
@@ -23,7 +24,7 @@ curl -o out.ts http://<機器>:12345/27       # 地上波の物理 27ch
 
 - チャンネルと SID の書き方は recpt1 のコマンドラインと同じ（`recpt1 --help`）。
 - 同時に受けられるのは 1 クライアント（チューナが 1 つ）。
-- スクランブルは解除しない。放送されたままの TS が出る。
+- 既定ではスクランブルを解除せず、放送されたままの TS が出る（`B25=1` で解除。下の「B-CAS」）。
 - 認証は無く、機器の全インターフェースで待ち受ける。
 
 機器の上で `recpt1 --device /dev/irdvideo0 <チャンネル> <秒> <ファイル>` と打って録ることも
@@ -37,10 +38,23 @@ curl -o out.ts http://<機器>:12345/27       # 地上波の物理 27ch
 ```
 PORT=12345
 DEVICE=/dev/irdvideo0
+B25=0            # 1 で B-CAS 解除（カードリーダが要る。下の「B-CAS」）
 ```
 
 変えたら `/etc/init.d/S80recpt1 restart`。ポートは、同じ LAN の EPGStation（8888）や
 Mirakurun（40772）と紛れないものにする。
+
+## B-CAS
+
+`B25=1` にすると、recpt1 は `--http` のサーバで `--b25` を付けて動き、リーダに挿した B-CAS
+カードでスクランブルを解除した TS を出す（libarib25 がカードに復号させる）。**自分が正規に
+発行された B-CAS カードで、受信を許可された放送を受けるためのもの。**
+
+- カードリーダが要る。SB-TV06-WRIP はスロットがあり、OpenIRD（v26.10-rc8 以降）の pcscd が
+  動く。POE-BR100-YB1 はスロットが無いので、`B25=1` にしても解除はできない。
+- カードが無い／pcscd が居ないときは、recpt1 が `Cannot start b25 decoder` と言って素の TS に
+  戻る（落ちない）。
+- 鍵の抽出・配布はしない。recpt1 と libarib25 は、カードが行う復号を使うだけ。
 
 ## 操作とログ
 
@@ -119,21 +133,35 @@ C/N・エラーがここに出る。サーバを立て直したときも
 
 ## 版と pin
 
-版は `<上流の版>-<commit の先頭 7 桁>-<アドオンの改訂>`（例 `1.2.0-77c7bce-4`）。取得する commit
-と改訂番号は `build.sh` の先頭にある。
+版は `<上流の版>-<commit の先頭 7 桁>-<アドオンの改訂>`（例 `1.2.0-77c7bce-5`）。取得する commit・
+libarib25 のタグ・改訂番号は `build.sh` の先頭にある。
 
-- 上流を上げるときは `RECPT1_COMMIT`（と `RECPT1_VERSION`）を変える。`patches/` が新しい
-  上流に当たらなければ、ビルドが止まる（上流で直っていれば、そのパッチは外す）。
+- 上流を上げるときは `RECPT1_COMMIT`（と `RECPT1_VERSION`）を、libarib25 を上げるときは
+  `ARIB25_TAG` を変える。`patches/` が新しい上流に当たらなければ、ビルドが止まる（上流で
+  直っていれば、そのパッチは外す）。
 - すでに配った `.ird` と中身が変わるのに上流の commit が同じときは、`ADDON_REV` を上げる。
   `addon/`・`patches/`・`build.sh` を変えたときと、SDK の pin を上げて作り直したとき（バイナリに
   入るコンパイラの識別文字列が変わる）がこれに当たる。版が同じままだと、機器の
   `ird-addon install recpt1` は「導入済み」とみなして入れ替えない。
-- `recpt1 --version` は `1.2.0 (stz2012 77c7bce2527e + addons-for-oird patches, without libarib25)`
-  のように、上流の commit とパッチの有無を出す。
+- `recpt1 --version` は `1.2.0 (stz2012 77c7bce2527e + addons-for-oird patches, with libarib25 v0.2.5-20220902)`
+  のように、上流の commit・パッチ・libarib25 の版を出す。
 
 ビルドの手順と SDK の pin はリポジトリの [README](../README.md)。
 
 ## 確認したこと
+
+`1.2.0-77c7bce-5`（2026-10-17）:
+
+- libarib25（`v0.2.5-20220902`）を静的リンクして B-CAS 対応にした。OpenIRD の SDK
+  v26.10-rc9（C++ 入り）でビルドでき、作り直しても `.ird` の SHA256 が変わらない。中の
+  `recpt1` は静的リンクの MIPS ビッグエンディアンのまま（libstdc++ も静的）。
+- 既定（`B25=0`）の挙動は `-4` と同じ。`-4` と同じ試験（メモリ・落ちる経路・連番・導入・
+  起動スクリプト）を、機器と同じ BusyBox の chroot で通した。
+- `B25=1` にすると、起動スクリプトがデーモンを `recpt1 --b25 --http …` で立て、見張り役が
+  それを掴んで start/stop できることを確かめた。
+- **実機での B-CAS 解除（カードを挿した WRIP での復号）と、機器の libstdc++ での C++ 経路
+  （`b25_startup` がカード無しで素に戻ること・カード有りで解除できること）は、これから
+  openird-d6／所有者が WRIP で確かめる。**
 
 `1.2.0-77c7bce-4`（2026-10-17）:
 
@@ -239,6 +267,12 @@ OpenIRD のドライバが PAT・PMT に載った PID だけを通すためで�
 
 ## ライセンス
 
-recpt1 は GPL-3.0（上流の `recpt1/COPYING`）。`.ird` には recpt1 のバイナリが入るので、配る
-ときは対応するソースを示す。ソースは上流の pin した commit と [patches/](patches/) で、ビルドの手順はこの
-`build.sh`。静的リンクしている libc は musl（MIT）。
+`.ird` には recpt1 のバイナリが入り、そこに次が静的リンクされている。配るときは、それぞれの
+対応するソースを示す（recpt1・libarib25 とも `build.sh` の pin がソースそのもので、ビルドの
+手順もこの `build.sh`）。
+
+- recpt1: GPL-3.0（上流の `recpt1/COPYING`）。ソースは pin した commit ＋ [patches/](patches/)。
+- libarib25: Apache-2.0。ソースは pin したタグ。
+- libstdc++（multi2 が C++）: GCC Runtime Library Exception 付き GPL-3.0。
+- pcsc-lite（PC/SC。SDK の `libpcsclite.a`）: BSD-3-Clause。
+- libc: musl（MIT）。
