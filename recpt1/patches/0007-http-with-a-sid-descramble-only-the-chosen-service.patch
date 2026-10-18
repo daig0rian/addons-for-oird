@@ -1,0 +1,93 @@
+Subject: [PATCH] http: with a SID, descramble only the chosen service
+
+recpt1 fed the whole transport stream to libarib25 and split by SID
+afterwards, so MULTI2 ran on every scrambled packet of the multiplex.  On
+a slow CPU (the ~400 MHz single-core MIPS of these devices) that is the
+bottleneck: one service already needs almost the whole core, and a
+multi-service BS/CS multiplex cannot be descrambled in real time.
+
+Run the splitter first when a SID is given, then descramble what is left.
+The splitter keeps the chosen service's PAT (rebuilt), PMT, PCR, ECM
+(the program_info CA_descriptor PID) and ES, which is all libarib25 needs
+to get the key and descramble -- so MULTI2 now runs on one service's
+packets, not the whole multiplex.  Without a SID the whole stream is
+descrambled, as before.
+
+At end of session the decoder was fed the split stream, so its flushed
+output is already the chosen service: write it without splitting again.
+
+---
+diff --git a/recpt1/recpt1.c b/recpt1/recpt1.c
+index eca3ab6..8d9f032 100644
+--- a/recpt1/recpt1.c
++++ b/recpt1/recpt1.c
+@@ -346,17 +346,6 @@ reader_func(void *p)
+ 
+         buf = sbuf; /* default */
+ 
+-        if(use_b25) {
+-            code = b25_decode(dec, &sbuf, &dbuf);
+-            if(code < 0) {
+-                fprintf(stderr, "b25_decode failed (code=%d). fall back to encrypted recording.\n", code);
+-                use_b25 = FALSE;
+-            }
+-            else
+-                buf = dbuf;
+-        }
+-
+-
+         if(use_splitter) {
+             splitbuf.buffer_filled = 0;
+ 
+@@ -413,6 +402,19 @@ reader_func(void *p)
+             ;
+         } /* if */
+ 
++        /* Descramble after the splitter: with a SID only the chosen service
++         * is left (its PAT/PMT/PCR/ECM/ES), so MULTI2 runs on far fewer
++         * packets.  Without a SID, buf is the whole stream (as before). */
++        if(use_b25) {
++            code = b25_decode(dec, &buf, &dbuf);
++            if(code < 0) {
++                fprintf(stderr, "b25_decode failed (code=%d). fall back to encrypted recording.\n", code);
++                use_b25 = FALSE;
++            }
++            else
++                buf = dbuf;
++        }
++
+ 
+         if(!fileless) {
+             /* write data to output file */
+@@ -468,6 +470,8 @@ reader_func(void *p)
+             buf.size = 0;
+ 
+             if(use_b25) {
++                /* the decoder was fed the split stream, so its flushed
++                 * output is already the chosen service */
+                 code = b25_finish(dec, &sbuf, &dbuf);
+                 if(code < 0)
+                     fprintf(stderr, "b25_finish failed\n");
+@@ -475,22 +479,6 @@ reader_func(void *p)
+                     buf = dbuf;
+             }
+ 
+-            if(use_splitter) {
+-                /* 分離対象以外をふるい落とす */
+-                code = split_ts(splitter, &buf, &splitbuf);
+-                if(code == TSS_NULL) {
+-                    split_select_finish = TSS_ERROR;
+-                    fprintf(stderr, "PMT reading..\n");
+-                }
+-                else if(code != TSS_SUCCESS) {
+-                    fprintf(stderr, "split_ts failed\n");
+-                    break;
+-                }
+-
+-                buf.data = splitbuf.buffer;
+-                buf.size = splitbuf.buffer_filled;
+-            }
+-
+             if(!fileless && !file_err) {
+                 wc = write(wfd, buf.data, buf.size);
+                 if(wc < 0) {

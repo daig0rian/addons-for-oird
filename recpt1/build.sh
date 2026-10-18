@@ -35,7 +35,7 @@ ARIB25_REPO="https://github.com/stz2012/libarib25"
 ARIB25_TAG="v0.2.5-20220902"                                # 93ff3af
 # アドオン側（addon/・patches/ の中身やこのスクリプト）だけを変えたときに上げる。版が同じだと、
 # 機器の ird-addon は「導入済み」とみなして入れ替えない。
-ADDON_REV=5
+ADDON_REV=6
 VERSION="$RECPT1_VERSION-${RECPT1_COMMIT:0:7}-$ADDON_REV"
 
 # SDK（CC・CXX・CROSS_COMPILE・IRD_ARCH・SYSROOT と、PATH の ird-mkaddon）: sdk.env を
